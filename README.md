@@ -26,9 +26,7 @@ uv tool install -e .
 deepseek-ocr-pdf scanned.pdf searchable.pdf
 ```
 
-Defaults to `--force-ocr`: every page is rasterized and its text layer rebuilt.
-To keep genuine born-digital text and replace only machine-OCR'd text, pass
-`--redo-ocr`. To OCR only pages with no text at all, pass `--skip-text`.
+Defaults to `--redo-ocr`: any existing invisible text layer is stripped and replaced, but the original page image is preserved losslessly (verified: image JPEG MD5 identical before/after). To rasterize every page and discard all text (e.g. to fix vector-text PDFs), pass `--force-ocr`. To OCR only pages with no text at all, pass `--skip-text`.
 
 Unrecognized options go straight to ocrmypdf, so `--sidecar out.txt`,
 `--jobs 4`, and `--deskew` work as usual.
@@ -68,7 +66,7 @@ failure mode, because nothing about the output looks wrong.
 
 ## Known limits
 
-- `--force-ocr` rasterizes born-digital pages: bigger files, no vector text.
+- `--force-ocr` rasterizes born-digital pages: bigger files, no vector text. Default `--redo-ocr` preserves the original image and only replaces the invisible layer; use `--force-ocr` only when vector text must be flattened.
 - Word boxes are synthesized from line boxes by character count, so selection
   within a line is approximate.
 - The guard only catches text Tesseract can find. Text both engines miss is

@@ -27,25 +27,25 @@ def test_input_and_output_are_required():
         build_parser().parse_args([])
 
 
-def test_force_ocr_is_the_default_policy():
+def test_redo_ocr_is_the_default_policy():
     args, _ = _parse(["in.pdf", "out.pdf"])
-    assert args.force_ocr is True
+    assert args.redo_ocr is True
 
 
-def test_explicit_redo_ocr_disables_force_ocr():
+def test_explicit_redo_ocr_disables_default_redo():
     args, passthrough = _parse(["in.pdf", "out.pdf", "--redo-ocr"])
-    assert args.force_ocr is False
+    assert args.redo_ocr is False
     assert "--redo-ocr" in passthrough
 
 
-def test_skip_text_disables_force_ocr():
+def test_skip_text_disables_redo_ocr():
     args, _ = _parse(["in.pdf", "out.pdf", "--skip-text"])
-    assert args.force_ocr is False
+    assert args.redo_ocr is False
 
 
 def test_explicit_force_ocr_is_not_added_twice():
     args, passthrough = _parse(["in.pdf", "out.pdf", "--force-ocr"])
-    assert args.force_ocr is False
+    assert args.redo_ocr is False
     assert "--force-ocr" in passthrough
 
 

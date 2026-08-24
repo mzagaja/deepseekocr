@@ -15,7 +15,7 @@ from deepseek_ocr_pdf.ollama_client import (
 from deepseek_ocr_pdf.plugin import DeepSeekOcrEngine
 
 #: ocrmypdf options that decide the fate of existing text. They are mutually
-#: exclusive, so naming any of them must suppress our default --force-ocr.
+#: exclusive, so naming any of them must suppress our default --redo-ocr.
 POLICY_FLAGS = ("--redo-ocr", "--skip-text", "--force-ocr")
 
 
@@ -51,14 +51,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip the Tesseract pass that finds text the model dropped",
     )
     parser.add_argument("-v", "--verbose", action="store_true")
-    parser.set_defaults(force_ocr=True)
+    parser.set_defaults(redo_ocr=True)
     return parser
 
 
 def resolve_policy(args: argparse.Namespace, passthrough: list[str]) -> None:
-    """Drop the default --force-ocr when the user named a policy themselves."""
+    """Drop the default --redo-ocr when the user named a policy themselves."""
     if any(flag in passthrough for flag in POLICY_FLAGS):
-        args.force_ocr = False
+        args.redo_ocr = False
 
 
 def configure_engine(args: argparse.Namespace) -> None:
@@ -111,8 +111,8 @@ def main(argv: list[str] | None = None) -> int:
     configure_engine(args)
 
     flags = list(passthrough)
-    if args.force_ocr:
-        flags.append("--force-ocr")
+    if args.redo_ocr:
+        flags.append("--redo-ocr")
 
     try:
         return ocrmypdf.ocr(
