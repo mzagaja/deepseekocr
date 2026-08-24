@@ -1,7 +1,7 @@
 # tests/test_grounding.py
 from pathlib import Path
 
-from deepseek_ocr_pdf.grounding import parse
+from deepseek_ocr_pdf.grounding import parse, strip_markup
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -59,3 +59,25 @@ def test_prose_with_no_boxes_yields_nothing():
     result = parse("The document appears to be a bank statement.")
     assert result.regions == ()
     assert result.malformed == 0
+
+
+def test_v1_latex_delimiters_are_removed():
+    result = parse((FIXTURES / "v1_balances.txt").read_text())
+    text = result.regions[0].lines[0]
+    assert "\\(" not in text
+    assert "\\)" not in text
+    assert "12,480.55" in text
+    assert "Closing Balance" in text
+
+
+def test_escaped_dollar_becomes_literal_dollar():
+    assert strip_markup(r"total \$5") == "total $5"
+
+
+def test_html_table_tags_are_removed():
+    assert strip_markup("<td>Widgets</td>") == "Widgets"
+
+
+def test_underscore_inside_word_is_kept():
+    # Identifiers must survive; only markdown emphasis is stripped.
+    assert strip_markup("field_name_here") == "field_name_here"
