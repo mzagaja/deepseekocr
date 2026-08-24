@@ -8,7 +8,16 @@ text actually appears on the page. Everything runs locally through Ollama.
 ```bash
 brew install ocrmypdf qpdf          # ghostscript and tesseract come along
 ollama pull hf.co/sabafallah/DeepSeek-OCR-2-GGUF:Q8_0
+
+# venv for development and tests
 uv venv && uv pip install -e ".[dev]"
+# then either activate it or use uv run:
+source .venv/bin/activate
+# or
+uv run deepseek-ocr-pdf --help
+
+# global CLI (puts deepseek-ocr-pdf on your PATH via ~/.local/bin)
+uv tool install -e .
 ```
 
 ## Use
