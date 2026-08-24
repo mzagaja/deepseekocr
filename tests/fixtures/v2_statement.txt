@@ -1,0 +1,34 @@
+sub_title[[83, 63, 429, 91]]
+## ACME CORPORATION
+
+text[[82, 108, 384, 130]]
+Quarterly Statement of Account
+
+text[[82, 172, 348, 191]]
+Account Holder: Matthew Zagaja
+
+text[[82, 197, 360, 216]]
+Account Number: 4471-9920-3318
+
+text[[82, 224, 463, 243]]
+Statement Period: 01 April 2026 to 30 June 2026
+
+text[[82, 277, 533, 350]]
+This statement summarizes all transactions posted to your
+account during the period noted above. Please review each
+entry carefully and report any discrepancy within 30 days.
+
+text[[82, 382, 472, 402]]
+Opening Balance ..... $ 12,480.55
+
+text[[82, 407, 471, 428]]
+Deposits and Credits ..... $ 3,201.10
+
+text[[82, 434, 483, 453]]
+Withdrawals and Debits ..... $ 1,795.62
+
+text[[82, 461, 443, 479]]
+Interest Earned ..... $ 44.18
+
+text[[82, 487, 464, 507]]
+Closing Balance ..... $ 13,930.21
