@@ -131,3 +131,59 @@ def test_overlapping_recovery_is_flagged_duplicate():
 def test_disjoint_recovery_is_not_duplicate():
     existing = [Box(0, 0, 100, 100)]
     assert is_duplicate(Box(500, 500, 600, 600), existing) is False
+
+
+def test_recovered_region_keeps_only_its_new_lines():
+    """A padded crop re-reads neighbours; only the new lines should survive.
+
+    Judging a recovered region as a whole keeps its repeated lines whenever the
+    new text outweighs them, which is how "TAX YEAR" lands in the text layer
+    twice and extracts as "AXTAX YEARYEAR".
+    """
+    from deepseek_ocr_pdf.grounding import Region
+    from deepseek_ocr_pdf.plugin import without_covered_lines
+
+    # Two lines: the first sits on top of text already captured, the second is new.
+    region = Region(
+        "text",
+        (0, 0, 999, 400),
+        ("already read", "genuinely new"),
+        boxes=((0, 0, 999, 200), (0, 200, 999, 400)),
+    )
+    existing = [Box(0, 0, 1000, 200)]
+
+    trimmed = without_covered_lines(region, existing, 1000, 1000)
+
+    assert trimmed is not None
+    assert trimmed.lines == ("genuinely new",)
+
+
+def test_fully_covered_region_is_dropped_entirely():
+    from deepseek_ocr_pdf.grounding import Region
+    from deepseek_ocr_pdf.plugin import without_covered_lines
+
+    region = Region(
+        "text",
+        (0, 0, 999, 200),
+        ("already read",),
+        boxes=((0, 0, 999, 200),),
+    )
+    existing = [Box(0, 0, 1000, 1000)]
+
+    assert without_covered_lines(region, existing, 1000, 1000) is None
+
+
+def test_wholly_new_region_survives_intact():
+    from deepseek_ocr_pdf.grounding import Region
+    from deepseek_ocr_pdf.plugin import without_covered_lines
+
+    region = Region(
+        "text",
+        (0, 600, 999, 800),
+        ("footer nobody read",),
+        boxes=((0, 600, 999, 800),),
+    )
+    trimmed = without_covered_lines(region, [Box(0, 0, 1000, 100)], 1000, 1000)
+
+    assert trimmed is not None
+    assert trimmed.lines == ("footer nobody read",)

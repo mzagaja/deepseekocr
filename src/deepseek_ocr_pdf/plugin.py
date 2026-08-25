@@ -87,6 +87,56 @@ def is_duplicate(box: Box, existing: list[Box]) -> bool:
     return covered_fraction(box, existing) > DUPLICATE_THRESHOLD
 
 
+def _to_grounding(
+    box: Box, width_px: int, height_px: int
+) -> tuple[int, int, int, int]:
+    """Express a pixel box back in the model's 0-999 grounding space."""
+    return (
+        round(box.left / width_px * GROUNDING_SCALE),
+        round(box.top / height_px * GROUNDING_SCALE),
+        round(box.right / width_px * GROUNDING_SCALE),
+        round(box.bottom / height_px * GROUNDING_SCALE),
+    )
+
+
+def without_covered_lines(
+    region: grounding.Region,
+    existing: list[Box],
+    width_px: int,
+    height_px: int,
+) -> grounding.Region | None:
+    """Drop the lines of a recovered region that repeat text already captured.
+
+    Crops are padded, so a re-read reaches back over neighbouring lines the
+    full-page pass already found. Judging the region as a whole keeps those
+    repeats whenever the new text outweighs them, and the layer then holds the
+    same words twice at overlapping positions -- which extracts as "AXTAX
+    YEARYEAR". Deciding line by line keeps the recovery and drops the echo.
+
+    Returns None when nothing new remains.
+    """
+    kept = [
+        (text, box)
+        for text, box in layout.region_bands(region, width_px, height_px)
+        if not is_duplicate(box, existing)
+    ]
+    if not kept:
+        return None
+
+    boxes = tuple(_to_grounding(box, width_px, height_px) for _, box in kept)
+    return grounding.Region(
+        label=region.label,
+        bbox=(
+            min(b[0] for b in boxes),
+            min(b[1] for b in boxes),
+            max(b[2] for b in boxes),
+            max(b[3] for b in boxes),
+        ),
+        lines=tuple(text for text, _ in kept),
+        boxes=boxes,
+    )
+
+
 def ocr_page_image(
     image_path: Path,
     client: OllamaClient,
@@ -125,13 +175,19 @@ def ocr_page_image(
             )
             for region in recovered:
                 shifted = shift_into_page(region, crop, width, height)
-                box = layout.rescale(shifted.bbox, width, height)
-                if box is None:
+                trimmed = without_covered_lines(
+                    shifted, grounded_boxes, width, height
+                )
+                if trimmed is None:
                     continue
-                if is_duplicate(box, grounded_boxes):
-                    continue
-                regions.append(shifted)
-                grounded_boxes.append(box)
+                regions.append(trimmed)
+                # Record the surviving lines individually, so the next crop is
+                # compared against real line geometry rather than one big
+                # rectangle spanning the gaps between them.
+                grounded_boxes.extend(
+                    box
+                    for _, box in layout.region_bands(trimmed, width, height)
+                )
 
         still_missing = coverage.uncovered(detected, grounded_boxes)
         for box in still_missing:
