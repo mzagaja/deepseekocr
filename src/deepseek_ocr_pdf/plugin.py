@@ -66,15 +66,22 @@ def shift_into_page(
         absolute = origin + value / GROUNDING_SCALE * extent
         return int(round(absolute / page_extent * GROUNDING_SCALE))
 
+    def box_to_page(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        a, b, c, d = box
+        return (
+            to_page(a, crop_left, crop_width, page_width),
+            to_page(b, crop_top, crop_height, page_height),
+            to_page(c, crop_left, crop_width, page_width),
+            to_page(d, crop_top, crop_height, page_height),
+        )
+
     return grounding.Region(
         label=region.label,
-        bbox=(
-            to_page(x1, crop_left, crop_width, page_width),
-            to_page(y1, crop_top, crop_height, page_height),
-            to_page(x2, crop_left, crop_width, page_width),
-            to_page(y2, crop_top, crop_height, page_height),
-        ),
+        bbox=box_to_page((x1, y1, x2, y2)),
         lines=region.lines,
+        # Per-line boxes have to travel with the region. Dropping them costs
+        # a recovered paragraph the only line geometry anyone measured for it.
+        boxes=tuple(box_to_page(box) for box in region.boxes),
     )
 
 

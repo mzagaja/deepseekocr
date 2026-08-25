@@ -187,3 +187,12 @@ def test_wholly_new_region_survives_intact():
 
     assert trimmed is not None
     assert trimmed.lines == ("footer nobody read",)
+
+
+def test_shift_preserves_per_line_boxes():
+    region = Region(
+        "text", (0, 0, 999, 999), ("top", "bottom"),
+        boxes=((0, 0, 999, 400), (0, 500, 999, 999)),
+    )
+    shifted = shift_into_page(region, (0, 0, 1000, 1000), 1000, 1000)
+    assert shifted.boxes == region.boxes
