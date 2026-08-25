@@ -18,6 +18,9 @@ from deepseek_ocr_pdf.plugin import DeepSeekOcrEngine
 #: exclusive, so naming any of them must suppress our default --redo-ocr.
 POLICY_FLAGS = ("--redo-ocr", "--skip-text", "--force-ocr")
 
+#: The ocrmypdf option that decides how the output file is written.
+OUTPUT_TYPE_FLAG = "--output-type"
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -51,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip the Tesseract pass that finds text the model dropped",
     )
     parser.add_argument("-v", "--verbose", action="store_true")
-    parser.set_defaults(redo_ocr=True)
+    parser.set_defaults(redo_ocr=True, plain_pdf=True)
     return parser
 
 
@@ -59,6 +62,12 @@ def resolve_policy(args: argparse.Namespace, passthrough: list[str]) -> None:
     """Drop the default --redo-ocr when the user named a policy themselves."""
     if any(flag in passthrough for flag in POLICY_FLAGS):
         args.redo_ocr = False
+
+
+def resolve_output_type(args: argparse.Namespace, passthrough: list[str]) -> None:
+    """Drop the default --output-type pdf when the user chose one themselves."""
+    if OUTPUT_TYPE_FLAG in passthrough:
+        args.plain_pdf = False
 
 
 def configure_engine(args: argparse.Namespace) -> None:
@@ -103,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args, passthrough = build_parser().parse_known_args(argv)
     resolve_policy(args, passthrough)
+    resolve_output_type(args, passthrough)
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -113,6 +123,15 @@ def main(argv: list[str] | None = None) -> int:
     flags = list(passthrough)
     if args.redo_ocr:
         flags.append("--redo-ocr")
+    # ocrmypdf defaults to --output-type auto, which reaches for a Ghostscript
+    # PDF/A conversion when veraPDF is unavailable. That pass preserves image
+    # data -- JPEG streams pass through byte for byte, and Flate bilevel images
+    # re-encode to CCITT G4 pixel-identically -- but it strips /Interpolate,
+    # which PDF/A forbids, and rebuilds the document around the images. This
+    # tool only replaces a text layer, so the default is the pass that changes
+    # nothing else; archival output stays available on request.
+    if args.plain_pdf:
+        flags.extend([OUTPUT_TYPE_FLAG, "pdf"])
 
     try:
         return ocrmypdf.ocr(

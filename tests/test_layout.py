@@ -176,3 +176,52 @@ def test_real_response_builds_a_full_tree():
     text = " ".join(w.text for w in page.iter_by_class(OcrClass.WORD))
     assert "ACME" in text
     assert "13,930.21" in text
+
+
+def test_per_line_boxes_are_used_when_counts_match():
+    """One box per line beats slicing the union into equal bands.
+
+    The model already told us where each line sits; the equal-band heuristic
+    only exists for regions that give a single box for several lines.
+    """
+    from deepseek_ocr_pdf.layout import region_bands
+
+    region = Region(
+        "text",
+        (0, 0, 999, 999),
+        ("top", "bottom"),
+        boxes=((0, 0, 500, 100), (0, 800, 999, 999)),
+    )
+    bands = region_bands(region, 1000, 1000)
+
+    assert [text for text, _ in bands] == ["top", "bottom"]
+    assert bands[0][1].top == 0
+    assert bands[0][1].bottom == pytest.approx(100.1, abs=0.5)
+    assert bands[1][1].top == pytest.approx(800.8, abs=0.5)
+
+
+def test_falls_back_to_equal_bands_when_counts_disagree():
+    from deepseek_ocr_pdf.layout import region_bands
+
+    region = Region(
+        "text",
+        (0, 0, 999, 999),
+        ("one", "two", "three"),
+        boxes=((0, 0, 999, 999),),
+    )
+    bands = region_bands(region, 1000, 1000)
+    assert len(bands) == 3
+    assert bands[0][1].bottom == pytest.approx(bands[1][1].top)
+
+
+def test_unusable_per_line_box_drops_only_that_line():
+    from deepseek_ocr_pdf.layout import region_bands
+
+    region = Region(
+        "text",
+        (0, 0, 999, 999),
+        ("good", "inverted"),
+        boxes=((0, 0, 500, 100), (500, 800, 100, 900)),
+    )
+    bands = region_bands(region, 1000, 1000)
+    assert [text for text, _ in bands] == ["good"]

@@ -81,3 +81,36 @@ def test_html_table_tags_are_removed():
 def test_underscore_inside_word_is_kept():
     # Identifiers must survive; only markdown emphasis is stripped.
     assert strip_markup("field_name_here") == "field_name_here"
+
+
+def test_multi_box_reference_is_a_block_not_text():
+    """The model groups consecutive lines under one label with one box each.
+
+    Observed on USPS receipts: ``text[[60, 381, 611, 415], [75, 413, 340,
+    449]]`` followed by two lines. A single-box pattern does not match that
+    header, so the coordinates fall through into the body and end up in the
+    text layer as searchable garbage.
+    """
+    result = parse(
+        "text[[60, 381, 611, 415], [75, 413, 340, 449]]\nfirst line\nsecond line"
+    )
+    assert len(result.regions) == 1
+    region = result.regions[0]
+    assert region.lines == ("first line", "second line")
+    assert region.boxes == ((60, 381, 611, 415), (75, 413, 340, 449))
+
+
+def test_multi_box_bbox_is_the_union():
+    result = parse("text[[10, 20, 30, 40], [5, 50, 60, 70]]\na\nb")
+    assert result.regions[0].bbox == (5, 20, 60, 70)
+
+
+def test_single_box_region_still_exposes_boxes():
+    result = parse("text[[1, 2, 3, 4]]\nhello")
+    assert result.regions[0].boxes == ((1, 2, 3, 4),)
+
+
+def test_multi_box_spanning_newlines():
+    result = parse("text[[1, 2, 3, 4],\n[5, 6, 7, 8]]\none\ntwo")
+    assert len(result.regions) == 1
+    assert result.regions[0].boxes == ((1, 2, 3, 4), (5, 6, 7, 8))

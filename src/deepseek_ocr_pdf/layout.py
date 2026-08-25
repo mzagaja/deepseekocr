@@ -65,6 +65,30 @@ def split_lines(box: Box, lines: tuple[str, ...]) -> list[tuple[str, Box]]:
     return bands
 
 
+def region_bands(
+    region: Region, width_px: int, height_px: int
+) -> list[tuple[str, Box]]:
+    """Pair each line of a region with the box it belongs in.
+
+    When the model gives one box per line -- which it does whenever it groups
+    consecutive lines under a single label -- use those boxes directly. They
+    are the model's own measurements, so they beat slicing the union rectangle
+    into equal bands. Fall back to equal bands when the counts disagree, which
+    is the ordinary case of one box covering a wrapped paragraph.
+    """
+    if len(region.boxes) == len(region.lines) and len(region.boxes) > 1:
+        bands: list[tuple[str, Box]] = []
+        for line, raw in zip(region.lines, region.boxes):
+            box = rescale(raw, width_px, height_px)
+            if box is not None:
+                bands.append((line, box))
+        if bands:
+            return bands
+
+    union = rescale(region.bbox, width_px, height_px)
+    return [] if union is None else split_lines(union, region.lines)
+
+
 def split_words(text: str, band: Box) -> list[tuple[str, Box]]:
     """Divide a line band into one box per word.
 
@@ -141,12 +165,9 @@ def build_page(
     for region in regions:
         if region.label in NON_TEXT_LABELS:
             continue
-        box = rescale(region.bbox, width_px, height_px)
-        if box is None:
-            continue
 
         line_class = _LABEL_TO_CLASS.get(region.label, OcrClass.LINE)
-        for text, band in split_lines(box, region.lines):
+        for text, band in region_bands(region, width_px, height_px):
             words = split_words(text, band)
             if not words:
                 continue

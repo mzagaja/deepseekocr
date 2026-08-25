@@ -1,7 +1,12 @@
 # tests/test_cli.py
 import pytest
 
-from deepseek_ocr_pdf.cli import build_parser, configure_engine, resolve_policy
+from deepseek_ocr_pdf.cli import (
+    build_parser,
+    configure_engine,
+    resolve_output_type,
+    resolve_policy,
+)
 from deepseek_ocr_pdf.ollama_client import DEFAULT_HOST, DEFAULT_MODEL
 from deepseek_ocr_pdf.plugin import DeepSeekOcrEngine
 
@@ -19,6 +24,7 @@ def reset_engine():
 def _parse(argv):
     args, passthrough = build_parser().parse_known_args(argv)
     resolve_policy(args, passthrough)
+    resolve_output_type(args, passthrough)
     return args, passthrough
 
 
@@ -88,3 +94,31 @@ def test_max_dim_is_applied_when_given():
     args, _ = _parse(["in.pdf", "out.pdf", "--max-dim", "1200"])
     configure_engine(args)
     assert DeepSeekOcrEngine.max_dim == 1200
+
+
+def test_plain_pdf_is_the_default_output_type():
+    """Replacing a text layer should not rewrite the whole document.
+
+    ocrmypdf defaults to --output-type auto, which falls back to a Ghostscript
+    PDF/A conversion when veraPDF is absent. Measured with ocrmypdf's own
+    settings, that pass is kinder than it first appears: JPEG streams survive
+    byte for byte and a Flate bilevel image re-encoded to CCITT G4 came back
+    pixel-identical. What it does change is /Interpolate, which PDF/A forbids
+    and Ghostscript therefore strips from every image, and the document
+    structure around them. Nobody asked for archival output, so the default is
+    the pass that leaves the file alone.
+    """
+    args, _ = _parse(["in.pdf", "out.pdf"])
+    assert args.plain_pdf is True
+
+
+def test_explicit_output_type_is_respected():
+    args, passthrough = _parse(["in.pdf", "out.pdf", "--output-type", "pdfa"])
+    assert args.plain_pdf is False
+    assert passthrough == ["--output-type", "pdfa"]
+
+
+def test_explicit_plain_output_type_is_not_added_twice():
+    args, passthrough = _parse(["in.pdf", "out.pdf", "--output-type", "pdf"])
+    assert args.plain_pdf is False
+    assert passthrough.count("--output-type") == 1
