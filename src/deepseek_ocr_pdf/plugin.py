@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from ocrmypdf import hookimpl
@@ -14,11 +14,12 @@ from PIL import Image
 
 from deepseek_ocr_pdf import coverage, grounding, layout
 from deepseek_ocr_pdf.geometry import Box, covered_fraction
-from deepseek_ocr_pdf.layout import GROUNDING_SCALE
+from deepseek_ocr_pdf.layout import GROUNDING_SCALE, LineSpan
 from deepseek_ocr_pdf.ollama_client import (
     DEFAULT_HOST,
     DEFAULT_MODEL,
     DEFAULT_TIMEOUT,
+    LINE_GROUNDING_PROMPT,
     OllamaClient,
 )
 
@@ -111,6 +112,7 @@ def without_covered_lines(
     existing: list[Box],
     width_px: int,
     height_px: int,
+    line_spans: Sequence[LineSpan] = (),
 ) -> grounding.Region | None:
     """Drop the lines of a recovered region that repeat text already captured.
 
@@ -124,7 +126,7 @@ def without_covered_lines(
     """
     kept = [
         (text, box)
-        for text, box in layout.region_bands(region, width_px, height_px)
+        for text, box in layout.region_bands(region, width_px, height_px, line_spans)
         if not is_duplicate(box, existing)
     ]
     if not kept:
@@ -144,6 +146,52 @@ def without_covered_lines(
     )
 
 
+def line_geometry(
+    image_path: Path, client: OllamaClient, width: int, height: int
+) -> list[LineSpan]:
+    """Measure the page's printed lines with a second, geometry-only pass.
+
+    The markdown pass reflows a wrapped paragraph into one run of text under
+    one box, and a text layer built from that offers the whole paragraph as a
+    single selectable run. This prompt returns one box per printed line, which
+    is what the layer needs. Its own text is only used for its length, so the
+    spacing it loses between words does not matter.
+
+    An unreadable response costs nothing but the finer geometry: the caller
+    falls back to slicing regions into equal bands, as it did before.
+    """
+    response = client.ocr_image(image_path, prompt=LINE_GROUNDING_PROMPT)
+    return [
+        LineSpan(box=box, chars=len(ref.text.replace(" ", "")))
+        for ref in grounding.parse_lines(response)
+        if (box := layout.rescale(ref.bbox, width, height)) is not None
+    ]
+
+
+def merge_line_spans(
+    spans: list[LineSpan], detected: list[Box]
+) -> list[LineSpan]:
+    """Fill gaps in the model's line geometry with the detector's.
+
+    The line-grounding pass drops lines the same way the markdown pass does:
+    measured 2026-08-25 over twelve runs of one page, it returned every printed
+    line ten times and stopped short of a whole paragraph twice, which left
+    that paragraph as a single selectable run.
+
+    A detected line that no measured span overlaps is one the model did not
+    report, so the detector's box is the only geometry anyone has for it. Its
+    text stays discarded, as everywhere else Tesseract is used here, which is
+    why the span carries no character count and falls back to weighting by
+    width.
+    """
+    boxes = [span.box for span in spans]
+    return spans + [
+        LineSpan(box=box, chars=0)
+        for box in detected
+        if covered_fraction(box, boxes) < coverage.UNCOVERED_THRESHOLD
+    ]
+
+
 def ocr_page_image(
     image_path: Path,
     client: OllamaClient,
@@ -151,6 +199,7 @@ def ocr_page_image(
     languages: list[str],
     dpi: float,
     page_number: int,
+    line_split_pass: bool = True,
 ) -> tuple[OcrElement, str]:
     """OCR one page image, repairing regions the model dropped.
 
@@ -161,8 +210,12 @@ def ocr_page_image(
         width, height = img.size
 
     regions = _regions_from(client.ocr_image(image_path), page_number)
+    line_spans = (
+        line_geometry(image_path, client, width, height) if line_split_pass else []
+    )
 
     detected = detect(image_path, languages)
+    line_spans = merge_line_spans(line_spans, detected)
     if detected:
         grounded_boxes = [
             box
@@ -183,7 +236,7 @@ def ocr_page_image(
             for region in recovered:
                 shifted = shift_into_page(region, crop, width, height)
                 trimmed = without_covered_lines(
-                    shifted, grounded_boxes, width, height
+                    shifted, grounded_boxes, width, height, line_spans
                 )
                 if trimmed is None:
                     continue
@@ -193,7 +246,9 @@ def ocr_page_image(
                 # rectangle spanning the gaps between them.
                 grounded_boxes.extend(
                     box
-                    for _, box in layout.region_bands(trimmed, width, height)
+                    for _, box in layout.region_bands(
+                        trimmed, width, height, line_spans
+                    )
                 )
 
         still_missing = coverage.uncovered(detected, grounded_boxes)
@@ -207,7 +262,9 @@ def ocr_page_image(
                 box.bottom,
             )
 
-    page = layout.build_page(regions, width, height, dpi, page_number)
+    page = layout.build_page(
+        regions, width, height, dpi, page_number, line_spans
+    )
     return page, layout.page_text(page)
 
 
@@ -226,6 +283,7 @@ class DeepSeekOcrEngine(OcrEngine):
     timeout = DEFAULT_TIMEOUT
     max_dim: int | None = None
     coverage_guard = True
+    line_split_pass = True
 
     @staticmethod
     def version() -> str:
@@ -280,6 +338,7 @@ class DeepSeekOcrEngine(OcrEngine):
             languages=list(getattr(options, "languages", None) or []),
             dpi=_dpi_of(input_file),
             page_number=page_number,
+            line_split_pass=DeepSeekOcrEngine.line_split_pass,
         )
 
     @staticmethod

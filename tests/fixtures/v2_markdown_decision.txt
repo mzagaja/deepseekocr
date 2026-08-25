@@ -1,0 +1,11 @@
+sub_title[[84, 64, 430, 87]]
+## TOWN OF NORTHFIELD
+
+text[[83, 104, 421, 125]]
+Zoning Board of Appeals - Decision
+
+text[[83, 163, 909, 279]]
+The Committee has reviewed the submitted materials and finds that the applicant has satisfied each of the conditions enumerated in Section 4 of the governing ordinance. Notice was published in a newspaper of general circulation not less than fourteen days before the hearing, and abutters within three hundred feet received written notice by certified mail. No objection was received from any abutter, and no member of the public appeared in opposition at the hearing held on the twelfth of May.
+
+text[[83, 299, 915, 367]]
+Accordingly, the variance is granted subject to the condition that construction commence within twelve months of the date of this decision. Any person aggrieved by this decision may appeal to the Superior Court within twenty days of the filing of this decision with the Town Clerk.

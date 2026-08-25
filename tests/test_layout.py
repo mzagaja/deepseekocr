@@ -6,7 +6,14 @@ from ocrmypdf.hocrtransform import OcrClass
 
 from deepseek_ocr_pdf.geometry import Box
 from deepseek_ocr_pdf.grounding import Region
-from deepseek_ocr_pdf.layout import GROUNDING_SCALE, build_page, rescale, split_lines, split_words
+from deepseek_ocr_pdf.layout import (
+    GROUNDING_SCALE,
+    LineSpan,
+    build_page,
+    rescale,
+    split_lines,
+    split_words,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -225,3 +232,135 @@ def test_unusable_per_line_box_drops_only_that_line():
     )
     bands = region_bands(region, 1000, 1000)
     assert [text for text, _ in bands] == ["good"]
+
+
+def test_measured_line_boxes_split_a_reflowed_paragraph():
+    """The markdown prompt returns a wrapped paragraph as one box and one run
+    of text. Boxes measured for its physical lines put it back on them."""
+    from deepseek_ocr_pdf.layout import region_bands
+
+    region = Region("text", (0, 0, 999, 300), ("aaa bbb ccc ddd",), boxes=((0, 0, 999, 300),))
+    lines = [Box(0, 0, 1000, 100), Box(0, 100, 1000, 200), Box(0, 200, 1000, 300)]
+    bands = region_bands(region, 1000, 1000, line_spans=[LineSpan(box, 0) for box in lines])
+
+    assert [box for _, box in bands] == lines
+    assert " ".join(text for text, _ in bands) == "aaa bbb ccc ddd"
+
+
+def test_a_short_last_line_takes_fewer_words():
+    """The measured lines carry no text here, so their widths decide."""
+    from deepseek_ocr_pdf.layout import region_bands
+
+    region = Region("text", (0, 0, 999, 200), ("aaaa bbbb cccc dd",), boxes=((0, 0, 999, 200),))
+    lines = [Box(0, 0, 1000, 100), Box(0, 100, 250, 200)]
+    bands = region_bands(region, 1000, 1000, line_spans=[LineSpan(box, 0) for box in lines])
+
+    assert [text for text, _ in bands] == ["aaaa bbbb cccc", "dd"]
+
+
+def test_line_boxes_outside_the_region_are_ignored():
+    from deepseek_ocr_pdf.layout import region_bands
+
+    region = Region("text", (0, 0, 999, 200), ("aaa bbb",), boxes=((0, 0, 999, 200),))
+    lines = [Box(0, 0, 1000, 100), Box(0, 100, 1000, 200), Box(0, 800, 1000, 900)]
+    bands = region_bands(region, 1000, 1000, line_spans=[LineSpan(box, 0) for box in lines])
+
+    assert len(bands) == 2
+    assert bands[-1][1] == Box(0, 100, 1000, 200)
+
+
+def test_a_single_measured_line_leaves_the_region_alone():
+    """One box inside the region says nothing the region did not already say."""
+    from deepseek_ocr_pdf.layout import region_bands
+
+    region = Region("text", (0, 0, 999, 100), ("aaa bbb",), boxes=((0, 0, 999, 100),))
+    bands = region_bands(region, 1000, 1000, line_spans=[LineSpan(Box(0, 10, 900, 90), 0)])
+
+    assert len(bands) == 1
+    assert bands[0][1].top == 0
+    assert bands[0][1].bottom == pytest.approx(100.1, abs=0.5)
+
+
+def test_a_model_box_holding_one_printed_line_is_left_alone():
+    """One measured line inside a box says nothing the box did not say."""
+    from deepseek_ocr_pdf.layout import region_bands
+
+    region = Region(
+        "text", (0, 0, 999, 999), ("top", "bottom"),
+        boxes=((0, 0, 500, 100), (0, 800, 999, 999)),
+    )
+    spans = [LineSpan(Box(10, 10, 400, 90), 3), LineSpan(Box(10, 810, 900, 990), 6)]
+    bands = region_bands(region, 1000, 1000, line_spans=spans)
+
+    assert [text for text, _ in bands] == ["top", "bottom"]
+    assert bands[0][1].right == pytest.approx(500.5, abs=0.5)
+
+
+def test_a_column_box_is_broken_onto_its_printed_lines():
+    """The model gives one box per column, not per line, on a two-column page.
+
+    Measured on a two-column minutes page: the markdown pass returned a single
+    region of two boxes and two runs of text, one per column, and each column
+    became one selectable run 222px tall until its box was broken up.
+    """
+    from deepseek_ocr_pdf.layout import region_bands
+
+    region = Region(
+        "text", (0, 0, 999, 400), ("aa bb cc dd", "ee ff gg hh"),
+        boxes=((0, 0, 400, 400), (500, 0, 999, 400)),
+    )
+    spans = [
+        LineSpan(Box(0, 0, 400, 200), 4),
+        LineSpan(Box(0, 200, 400, 400), 4),
+        LineSpan(Box(510, 0, 1000, 200), 4),
+        LineSpan(Box(510, 200, 1000, 400), 4),
+    ]
+    bands = region_bands(region, 1000, 1000, line_spans=spans)
+
+    # Left column top to bottom, then right column: reading order, not
+    # interleaved by vertical position across the columns.
+    assert [text for text, _ in bands] == ["aa bb", "cc dd", "ee ff", "gg hh"]
+
+
+def test_measured_lines_reach_the_word_level():
+    """Each measured line becomes its own line element with its own words."""
+    region = Region("text", (0, 0, 999, 200), ("aaa bbb ccc ddd",), boxes=((0, 0, 999, 200),))
+    page = build_page(
+        [region], 1000, 1000, 200.0, 0,
+        line_spans=[LineSpan(Box(0, 0, 1000, 100), 0), LineSpan(Box(0, 100, 1000, 200), 0)],
+    )
+    lines = page.iter_by_class(*OcrClass.LINE_TYPES)
+    assert len(lines) == 2
+    assert [w.text for w in lines[0].children] == ["aaa", "bbb"]
+    assert lines[0].bbox.bottom == 100
+
+
+def test_characters_read_on_each_line_decide_the_split():
+    """Equal-width boxes say nothing; the characters read on them do.
+
+    Measured on the decision page: character counts put all eight line breaks
+    where the page really breaks, while box widths moved one word down a line.
+    """
+    from deepseek_ocr_pdf.layout import region_bands
+
+    region = Region("text", (0, 0, 999, 200), ("aa bb cc dd",), boxes=((0, 0, 999, 200),))
+    spans = [
+        LineSpan(Box(0, 0, 500, 100), chars=2),
+        LineSpan(Box(0, 100, 500, 200), chars=6),
+    ]
+    bands = region_bands(region, 1000, 1000, line_spans=spans)
+
+    assert [text for text, _ in bands] == ["aa", "bb cc dd"]
+
+
+def test_width_stands_in_when_a_line_came_back_with_no_text():
+    from deepseek_ocr_pdf.layout import region_bands
+
+    region = Region("text", (0, 0, 999, 200), ("aaaa bbbb cccc dd",), boxes=((0, 0, 999, 200),))
+    spans = [
+        LineSpan(Box(0, 0, 1000, 100), chars=0),
+        LineSpan(Box(0, 100, 250, 200), chars=0),
+    ]
+    bands = region_bands(region, 1000, 1000, line_spans=spans)
+
+    assert [text for text, _ in bands] == ["aaaa bbbb cccc", "dd"]

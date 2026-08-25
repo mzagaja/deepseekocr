@@ -1,7 +1,7 @@
 # tests/test_grounding.py
 from pathlib import Path
 
-from deepseek_ocr_pdf.grounding import parse, strip_markup
+from deepseek_ocr_pdf.grounding import LineRef, parse, parse_lines, strip_markup
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -147,3 +147,43 @@ def test_decoded_entity_is_not_reparsed_as_a_tag():
 def test_tag_removal_does_not_leave_double_spaces():
     result = parse("text[[1, 2, 3, 4]]\n<p>Total</p> <b>due</b>")
     assert result.regions[0].lines == ("Total due",)
+
+
+def test_line_refs_parse_one_per_physical_line():
+    result = parse_lines((FIXTURES / "v2_lines_decision.txt").read_text())
+    assert len(result) == 11
+    assert result[0].text == "TOWN OFNORTHFIELD"
+    assert result[0].bbox == (87, 67, 427, 85)
+
+
+def test_line_refs_keep_reading_order():
+    result = parse_lines((FIXTURES / "v2_lines_decision.txt").read_text())
+    tops = [ref.bbox[1] for ref in result]
+    assert tops == sorted(tops)
+
+
+def test_line_ref_text_is_stripped_of_markup():
+    assert parse_lines("## <b>Total</b> due[[1, 2, 3, 4]]")[0].text == "Total due"
+
+
+def test_line_ref_survives_deepseek_special_tokens():
+    """Another Ollama template may leave <|ref|>/<|det|> in place."""
+    raw = "<|ref|>Total due<|/ref|><|det|>[[1, 2, 3, 4]]<|/det|>"
+    assert parse_lines(raw) == (LineRef("Total due", (1, 2, 3, 4)),)
+
+
+def test_line_without_coordinates_is_ignored():
+    raw = "A heading with no box\nReal line[[1, 2, 3, 4]]"
+    assert parse_lines(raw) == (LineRef("Real line", (1, 2, 3, 4)),)
+
+
+def test_line_ref_with_no_text_is_ignored():
+    assert parse_lines("[[1, 2, 3, 4]]") == ()
+
+
+def test_multi_box_line_ref_splits_text_across_its_boxes():
+    """One ref, two boxes: each box is its own physical line."""
+    raw = "aaaa bbbb[[0, 0, 100, 10], [0, 20, 100, 30]]"
+    refs = parse_lines(raw)
+    assert [ref.text for ref in refs] == ["aaaa", "bbbb"]
+    assert [ref.bbox for ref in refs] == [(0, 0, 100, 10), (0, 20, 100, 30)]

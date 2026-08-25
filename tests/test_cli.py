@@ -19,6 +19,7 @@ def reset_engine():
     DeepSeekOcrEngine.host = DEFAULT_HOST
     DeepSeekOcrEngine.max_dim = None
     DeepSeekOcrEngine.coverage_guard = True
+    DeepSeekOcrEngine.line_split_pass = True
 
 
 def _parse(argv):
@@ -82,6 +83,18 @@ def test_configure_engine_can_disable_the_coverage_guard():
     args, _ = _parse(["in.pdf", "out.pdf", "--no-coverage-guard"])
     configure_engine(args)
     assert DeepSeekOcrEngine.coverage_guard is False
+
+
+def test_line_split_pass_is_on_by_default():
+    args, _ = _parse(["in.pdf", "out.pdf"])
+    configure_engine(args)
+    assert DeepSeekOcrEngine.line_split_pass is True
+
+
+def test_configure_engine_can_disable_the_line_split_pass():
+    args, _ = _parse(["in.pdf", "out.pdf", "--no-line-split-pass"])
+    configure_engine(args)
+    assert DeepSeekOcrEngine.line_split_pass is False
 
 
 def test_max_dim_defaults_to_no_resizing():

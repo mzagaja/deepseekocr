@@ -4,14 +4,30 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from ocrmypdf.hocrtransform import BoundingBox, OcrClass, OcrElement
 
 from deepseek_ocr_pdf.geometry import Box
-from deepseek_ocr_pdf.grounding import Region
+from deepseek_ocr_pdf.grounding import Region, share_text
 
 #: DeepSeek-OCR normalizes coordinates to 0-999 on each axis independently.
 GROUNDING_SCALE = 999
+
+
+@dataclass(frozen=True)
+class LineSpan:
+    """One printed line the line-grounding pass measured.
+
+    ``chars`` is how many non-space characters that pass read on the line. It
+    is a better guide than the box's width to how much of a paragraph's text
+    belongs here: measured on the decision page, character counts put all
+    eight line breaks where the page really breaks, while widths moved one
+    word onto the wrong line.
+    """
+
+    box: Box
+    chars: int
 
 
 def rescale(
@@ -65,28 +81,106 @@ def split_lines(box: Box, lines: tuple[str, ...]) -> list[tuple[str, Box]]:
     return bands
 
 
+def distribute_text(
+    lines: Sequence[str], spans: Sequence[LineSpan]
+) -> list[tuple[str, Box]]:
+    """Lay a region's text across the lines measured for it.
+
+    The region's lines are joined first, because the reason to reach for
+    measured lines at all is that the model's own line breaks are missing or
+    wrong. Each measured line then takes a share of the words proportional to
+    the characters read on it. Its box width serves when a line came back with
+    no text of its own.
+    """
+    joined = " ".join(line for line in lines if line).strip()
+    if not joined or not spans:
+        return []
+
+    weights = [float(span.chars) for span in spans]
+    if not all(weights):
+        weights = [span.box.width for span in spans]
+
+    runs = share_text(joined, weights)
+    return [(run, span.box) for run, span in zip(runs, spans) if run]
+
+
+def inside(box: Box, container: Box) -> bool:
+    """True when a box's centre falls within a container."""
+    x = (box.left + box.right) / 2
+    y = (box.top + box.bottom) / 2
+    return (
+        container.left <= x <= container.right
+        and container.top <= y <= container.bottom
+    )
+
+
+def measured_inside(box: Box, spans: Sequence[LineSpan]) -> list[LineSpan]:
+    """The measured lines that fall within a box, in reading order."""
+    return sorted(
+        (span for span in spans if inside(span.box, box)),
+        key=lambda span: (span.box.top, span.box.left),
+    )
+
+
+def onto_printed_lines(
+    text: str, box: Box, spans: Sequence[LineSpan]
+) -> list[tuple[str, Box]]:
+    """Break one of the model's boxes onto the printed lines inside it.
+
+    A single measured line inside the box says nothing the box did not already
+    say, so the box is left alone. Two or more mean the box spans several
+    printed lines and the text belongs on them individually.
+    """
+    measured = measured_inside(box, spans)
+    if len(measured) > 1:
+        bands = distribute_text([text], measured)
+        if bands:
+            return bands
+    return [(text, box)]
+
+
 def region_bands(
-    region: Region, width_px: int, height_px: int
+    region: Region,
+    width_px: int,
+    height_px: int,
+    line_spans: Sequence[LineSpan] = (),
 ) -> list[tuple[str, Box]]:
     """Pair each line of a region with the box it belongs in.
 
-    When the model gives one box per line -- which it does whenever it groups
-    consecutive lines under a single label -- use those boxes directly. They
-    are the model's own measurements, so they beat slicing the union rectangle
-    into equal bands. Fall back to equal bands when the counts disagree, which
-    is the ordinary case of one box covering a wrapped paragraph.
+    Every box the model gave is checked against ``line_spans`` -- the page's
+    printed lines, as measured by the line-grounding pass -- and broken onto
+    them when it covers more than one. A label's boxes are not always lines:
+    the model gives one box per column on a two-column page, and one box for a
+    whole wrapped paragraph on a one-column page, and neither is selectable a
+    line at a time until it is broken up.
+
+    Equal-height bands remain the last resort, for when nothing measured the
+    lines at all.
     """
     if len(region.boxes) == len(region.lines) and len(region.boxes) > 1:
-        bands: list[tuple[str, Box]] = []
-        for line, raw in zip(region.lines, region.boxes):
-            box = rescale(raw, width_px, height_px)
-            if box is not None:
-                bands.append((line, box))
+        pairs = [
+            (line, box)
+            for line, raw in zip(region.lines, region.boxes)
+            if (box := rescale(raw, width_px, height_px)) is not None
+        ]
+        if pairs:
+            return [
+                band
+                for text, box in pairs
+                for band in onto_printed_lines(text, box, line_spans)
+            ]
+
+    union = rescale(region.bbox, width_px, height_px)
+    if union is None:
+        return []
+
+    measured = measured_inside(union, line_spans)
+    if len(measured) > 1:
+        bands = distribute_text(region.lines, measured)
         if bands:
             return bands
 
-    union = rescale(region.bbox, width_px, height_px)
-    return [] if union is None else split_lines(union, region.lines)
+    return split_lines(union, region.lines)
 
 
 def split_words(text: str, band: Box) -> list[tuple[str, Box]]:
@@ -144,6 +238,7 @@ def build_page(
     height_px: int,
     dpi: float,
     page_number: int,
+    line_spans: Sequence[LineSpan] = (),
 ) -> OcrElement:
     """Assemble parsed regions into a page tree ocrmypdf can render.
 
@@ -167,7 +262,7 @@ def build_page(
             continue
 
         line_class = _LABEL_TO_CLASS.get(region.label, OcrClass.LINE)
-        for text, band in region_bands(region, width_px, height_px):
+        for text, band in region_bands(region, width_px, height_px, line_spans):
             words = split_words(text, band)
             if not words:
                 continue

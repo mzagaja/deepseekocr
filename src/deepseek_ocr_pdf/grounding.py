@@ -13,6 +13,16 @@ consecutive lines under one reference::
     Extra Services & Fees
     Return Receipt (hardcopy)
 
+The ``OCR this image.`` prompt answers in a different shape: no labels, no
+markdown, and the box trailing the text it belongs to, one physical line per
+box::
+
+    TheCommitteehasreviewed the submitted materials and finds[[87, 165, 897, 183]]
+    theconditionsenumeratedinSection4ofthegoverning ordinance.[[86, 188, 834, 206]]
+
+``parse`` reads the first shape, ``parse_lines`` the second. They are never
+mixed: each belongs to one prompt.
+
 Ollama's template strips DeepSeek's ``<|ref|>``/``<|det|>`` special tokens but
 keeps the label and coordinates. Coordinates are normalized 0-999 on each axis
 independently, relative to the submitted image.
@@ -22,6 +32,7 @@ from __future__ import annotations
 
 import html
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 #: One ``[x1, y1, x2, y2]`` group. Whitespace and newlines inside are tolerated
@@ -41,6 +52,16 @@ _BLOCK = re.compile(
 _BLOCK_LIKE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*\[\[.*?\]\]\s*$", re.MULTILINE | re.DOTALL
 )
+
+#: A line of the ``OCR this image.`` response: text, then its box list. The
+#: text is non-greedy so the box list swallows the whole bracketed tail.
+_LINE_REF = re.compile(
+    rf"^(?P<text>.*?)\[\s*(?P<boxes>{_COORDS}(?:\s*,\s*{_COORDS})*)\s*\]\s*$"
+)
+
+#: DeepSeek's grounding tokens. Ollama's current template strips them; another
+#: template may not, and they would otherwise end up in the text layer.
+_SPECIAL = re.compile(r"<\|/?(?:ref|det)\|>")
 
 _ONE_BOX = re.compile(r"-?\d+")
 
@@ -64,6 +85,14 @@ class Region:
     bbox: tuple[int, int, int, int]
     lines: tuple[str, ...]
     boxes: tuple[tuple[int, int, int, int], ...] = ()
+
+
+@dataclass(frozen=True)
+class LineRef:
+    """One physical line the model located, coordinates still in 0-999 space."""
+
+    text: str
+    bbox: tuple[int, int, int, int]
 
 
 @dataclass(frozen=True)
@@ -144,3 +173,77 @@ def parse(response: str) -> ParseResult:
         )
 
     return ParseResult(regions=tuple(regions), malformed=max(0, malformed))
+
+
+def share_text(text: str, weights: Sequence[float]) -> list[str]:
+    """Split text into one run per weight, in proportion to the weights.
+
+    Used wherever the text of several physical lines arrives as one run and
+    their boxes are known separately: each box's width says how much of the
+    text belongs to it. Splitting on word boundaries keeps every word whole,
+    and each cut lands where the running character count crosses that line's
+    cumulative share, so one misjudged word does not shift the rest.
+    """
+    words = text.split()
+    count = len(weights)
+    if count <= 1 or len(words) < count:
+        return [text]
+
+    total_weight = sum(weights)
+    if total_weight <= 0:
+        return [text]
+
+    total_chars = sum(len(word) for word in words)
+    # Cumulative character offset at which each line but the last should end.
+    cuts = []
+    running = 0.0
+    for weight in weights[:-1]:
+        running += weight
+        cuts.append(running / total_weight * total_chars)
+
+    runs: list[list[str]] = [[] for _ in weights]
+    index = consumed = 0
+    for word in words:
+        # A word goes to whichever line holds most of its characters.
+        while index < count - 1 and consumed + len(word) / 2 > cuts[index]:
+            index += 1
+        runs[index].append(word)
+        consumed += len(word)
+
+    if all(runs):
+        return [" ".join(run) for run in runs]
+
+    # One long word can swallow a whole line's share and strand the next line.
+    # Splitting by word count instead keeps every box holding something.
+    step = len(words) / count
+    return [
+        " ".join(words[round(i * step) : round((i + 1) * step)])
+        for i in range(count)
+    ]
+
+
+def parse_lines(response: str) -> tuple[LineRef, ...]:
+    """Read an ``OCR this image.`` response as one reference per physical line.
+
+    Lines without coordinates are dropped rather than counted as malformed: the
+    model prefaces its answer with stray text often enough that logging every
+    one would be noise, and this response is only ever used for geometry.
+    """
+    refs: list[LineRef] = []
+
+    for raw in _SPECIAL.sub("", response).splitlines():
+        match = _LINE_REF.match(raw.strip())
+        if match is None:
+            continue
+
+        text = strip_markup(match.group("text"))
+        if not text:
+            continue
+
+        boxes = _parse_boxes(match.group("boxes"))
+        widths = [box[2] - box[0] for box in boxes]
+        for run, box in zip(share_text(text, widths), boxes):
+            if run:
+                refs.append(LineRef(text=run, bbox=box))
+
+    return tuple(refs)

@@ -27,6 +27,19 @@ DEFAULT_TIMEOUT = 300.0
 #: this is the phrasing documented for grounding output.
 GROUNDING_PROMPT = "<image>\n<|grounding|>Convert the document to markdown."
 
+#: The plain grounded OCR prompt, used for geometry only.
+#:
+#: It answers with one box per physical line. The markdown prompt does not: it
+#: reflows a wrapped paragraph into a single run of text under a single box,
+#: and a text layer built from that gives the whole paragraph one selectable
+#: run. Measured 2026-08-25 on a two-paragraph decision page: the markdown
+#: prompt returned 4 boxes, this one returned 11 -- one per printed line,
+#: including a footer the markdown pass dropped entirely.
+#:
+#: Its recognized text is worse, dropping spaces between words
+#: ("TheCommitteehasreviewed"), so the markdown pass stays the text of record.
+LINE_GROUNDING_PROMPT = "<image>\n<|grounding|>OCR this image."
+
 
 class OllamaUnavailable(RuntimeError):
     """Ollama is not reachable, or the model is not pulled."""
@@ -78,7 +91,12 @@ class OllamaClient:
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
             return json.load(response)
 
-    def ocr_image(self, image_path: Path, crop: tuple[int, int, int, int] | None = None) -> str:
+    def ocr_image(
+        self,
+        image_path: Path,
+        crop: tuple[int, int, int, int] | None = None,
+        prompt: str = GROUNDING_PROMPT,
+    ) -> str:
         """OCR a page image, or a crop of it, and return the raw response.
 
         An empty response is retried once. A second empty response is returned
@@ -91,7 +109,7 @@ class OllamaClient:
 
         payload = {
             "model": self.model,
-            "prompt": GROUNDING_PROMPT,
+            "prompt": prompt,
             "images": [base64.b64encode(buffer.getvalue()).decode()],
             "stream": False,
         }

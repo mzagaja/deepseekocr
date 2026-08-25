@@ -53,6 +53,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the Tesseract pass that finds text the model dropped",
     )
+    parser.add_argument(
+        "--no-line-split-pass",
+        action="store_true",
+        help=(
+            "Measure printed lines with Tesseract instead of a second model "
+            "pass. Halves the time, moves the odd line break by a word"
+        ),
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.set_defaults(redo_ocr=True, plain_pdf=True)
     return parser
@@ -81,6 +89,7 @@ def configure_engine(args: argparse.Namespace) -> None:
     DeepSeekOcrEngine.timeout = args.timeout
     DeepSeekOcrEngine.max_dim = args.max_dim
     DeepSeekOcrEngine.coverage_guard = not args.no_coverage_guard
+    DeepSeekOcrEngine.line_split_pass = not args.no_line_split_pass
 
 
 def _as_kwargs(flags: list[str]) -> dict:

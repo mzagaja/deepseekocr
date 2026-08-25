@@ -7,6 +7,7 @@ from PIL import Image
 
 from deepseek_ocr_pdf.geometry import Box
 from deepseek_ocr_pdf.grounding import Region
+from deepseek_ocr_pdf.ollama_client import GROUNDING_PROMPT, LINE_GROUNDING_PROMPT
 from deepseek_ocr_pdf.plugin import (
     DeepSeekOcrEngine,
     is_duplicate,
@@ -25,13 +26,23 @@ def page_image(tmp_path):
 
 
 class FakeClient:
-    """Records calls and replays scripted responses."""
+    """Records calls and replays scripted responses.
 
-    def __init__(self, responses):
+    The line-grounding pass is scripted separately from the markdown pass
+    because it uses its own prompt, so a test that only cares about one of
+    them does not have to script around the other.
+    """
+
+    def __init__(self, responses, lines=""):
         self.responses = list(responses)
+        self.lines = lines
         self.crops = []
+        self.prompts = []
 
-    def ocr_image(self, image_path, crop=None):
+    def ocr_image(self, image_path, crop=None, prompt=GROUNDING_PROMPT):
+        self.prompts.append(prompt)
+        if prompt == LINE_GROUNDING_PROMPT:
+            return self.lines
         self.crops.append(crop)
         return self.responses.pop(0) if self.responses else ""
 
@@ -189,6 +200,54 @@ def test_wholly_new_region_survives_intact():
     assert trimmed.lines == ("footer nobody read",)
 
 
+def test_line_pass_splits_a_reflowed_paragraph(page_image):
+    """The whole point: one selectable run per printed line, not per paragraph."""
+    markdown = "text[[100, 100, 900, 400]]\naaa bbb ccc ddd eee fff"
+    lines = (
+        "aaa bbb[[100, 100, 900, 200]]\n"
+        "ccc ddd[[100, 200, 900, 300]]\n"
+        "eee fff[[100, 300, 900, 400]]"
+    )
+    client = FakeClient([markdown], lines=lines)
+    page, _ = ocr_page_image(
+        page_image, client, detect=lambda path, langs: [], languages=[], dpi=200.0,
+        page_number=0,
+    )
+
+    bands = page.iter_by_class(*OcrClass.LINE_TYPES)
+    assert [band.text for band in bands] == ["aaa bbb", "ccc ddd", "eee fff"]
+    assert bands[0].bbox.bottom == pytest.approx(bands[1].bbox.top, abs=1.0)
+
+
+def test_line_pass_runs_once_per_page(page_image):
+    client = FakeClient([""], lines="")
+    ocr_page_image(
+        page_image, client, detect=lambda path, langs: [], languages=[], dpi=200.0,
+        page_number=0,
+    )
+    assert client.prompts.count(LINE_GROUNDING_PROMPT) == 1
+
+
+def test_line_pass_can_be_switched_off(page_image):
+    client = FakeClient([""])
+    ocr_page_image(
+        page_image, client, detect=lambda path, langs: [], languages=[], dpi=200.0,
+        page_number=0, line_split_pass=False,
+    )
+    assert LINE_GROUNDING_PROMPT not in client.prompts
+
+
+def test_paragraph_survives_an_empty_line_pass(page_image):
+    """A refusal on the geometry pass must not cost us the text."""
+    markdown = "text[[100, 100, 900, 400]]\naaa bbb ccc"
+    client = FakeClient([markdown], lines="")
+    page, text = ocr_page_image(
+        page_image, client, detect=lambda path, langs: [], languages=[], dpi=200.0,
+        page_number=0,
+    )
+    assert text == "aaa bbb ccc"
+
+
 def test_shift_preserves_per_line_boxes():
     region = Region(
         "text", (0, 0, 999, 999), ("top", "bottom"),
@@ -196,3 +255,35 @@ def test_shift_preserves_per_line_boxes():
     )
     shifted = shift_into_page(region, (0, 0, 1000, 1000), 1000, 1000)
     assert shifted.boxes == region.boxes
+
+
+def test_detector_fills_a_gap_the_line_pass_left():
+    """The line pass drops lines too; the detector's boxes cover for it."""
+    from deepseek_ocr_pdf.layout import LineSpan
+    from deepseek_ocr_pdf.plugin import merge_line_spans
+
+    spans = [LineSpan(Box(0, 0, 100, 20), 8)]
+    detected = [Box(0, 100, 100, 120)]
+    merged = merge_line_spans(spans, detected)
+
+    assert [span.box for span in merged] == [Box(0, 0, 100, 20), Box(0, 100, 100, 120)]
+    # Tesseract's text is discarded, so the filled line is weighted by width.
+    assert merged[1].chars == 0
+
+
+def test_detector_does_not_double_a_line_the_model_measured():
+    from deepseek_ocr_pdf.layout import LineSpan
+    from deepseek_ocr_pdf.plugin import merge_line_spans
+
+    spans = [LineSpan(Box(0, 0, 100, 20), 8)]
+    merged = merge_line_spans(spans, [Box(2, 1, 98, 19)])
+
+    assert len(merged) == 1
+
+
+def test_nothing_detected_leaves_the_spans_alone():
+    from deepseek_ocr_pdf.layout import LineSpan
+    from deepseek_ocr_pdf.plugin import merge_line_spans
+
+    spans = [LineSpan(Box(0, 0, 100, 20), 8)]
+    assert merge_line_spans(spans, []) == spans
