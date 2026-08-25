@@ -20,6 +20,7 @@ independently, relative to the submitted image.
 
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass
 
@@ -44,6 +45,7 @@ _BLOCK_LIKE = re.compile(
 _ONE_BOX = re.compile(r"-?\d+")
 
 _HTML_TAG = re.compile(r"<[^>\n]{1,200}>")
+_SPACES = re.compile(r"[ \t]{2,}")
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+")
 _EMPHASIS = re.compile(r"\*\*|__|\*|(?<![A-Za-z0-9])_(?![A-Za-z0-9])")
 _MATH_DELIM = re.compile(r"\\[()\[\]]")
@@ -76,13 +78,20 @@ def strip_markup(text: str) -> str:
     The output is an invisible text layer, so markup would be searchable
     noise. v2 emits markdown headings and HTML tables; v1 additionally wrapped
     figures in LaTeX math delimiters.
+
+    Tags become a space rather than nothing. A table's cells are adjacent in
+    the markup but separate words on the page, so deleting ``</td><td>``
+    outright welds them into one token and hides both from any search that
+    respects word boundaries. Entities are decoded last, after tag removal,
+    so that a decoded ``&lt;`` is never mistaken for the start of a tag.
     """
-    text = _HTML_TAG.sub("", text)
+    text = _HTML_TAG.sub(" ", text)
     text = _HEADING.sub("", text)
     text = _MATH_DELIM.sub("", text)
     text = _ESCAPED.sub(r"\1", text)
     text = _EMPHASIS.sub("", text)
-    return text.strip()
+    text = html.unescape(text)
+    return _SPACES.sub(" ", text).strip()
 
 
 def _parse_boxes(raw: str) -> tuple[tuple[int, int, int, int], ...]:

@@ -114,3 +114,36 @@ def test_multi_box_spanning_newlines():
     result = parse("text[[1, 2, 3, 4],\n[5, 6, 7, 8]]\none\ntwo")
     assert len(result.regions) == 1
     assert result.regions[0].boxes == ((1, 2, 3, 4), (5, 6, 7, 8))
+
+
+def test_table_cells_do_not_glue_together():
+    """Removing an HTML tag must leave a word boundary behind.
+
+    v2 returns tables as HTML. Deleting <td> outright ran the cells together --
+    "INVOICE" and "GAUDREAU, ERIN" became "INVOICEGAUDREAU, ERIN" in the text
+    layer, which defeats any search that respects word boundaries.
+    """
+    result = parse(
+        "text[[1, 2, 3, 4]]\n<td>INVOICE</td><td>GAUDREAU, ERIN</td>"
+    )
+    assert result.regions[0].lines == ("INVOICE GAUDREAU, ERIN",)
+
+
+def test_html_entities_are_decoded():
+    result = parse("text[[1, 2, 3, 4]]\nBRAKE SHOES &amp;/OR PADS")
+    assert result.regions[0].lines == ("BRAKE SHOES &/OR PADS",)
+
+
+def test_quote_and_numeric_entities_are_decoded():
+    result = parse('text[[1, 2, 3, 4]]\n&quot;Paid&quot; &#8212; in full')
+    assert result.regions[0].lines == ('"Paid" — in full',)
+
+
+def test_decoded_entity_is_not_reparsed_as_a_tag():
+    result = parse("text[[1, 2, 3, 4]]\nif a &lt;b&gt; c")
+    assert result.regions[0].lines == ("if a <b> c",)
+
+
+def test_tag_removal_does_not_leave_double_spaces():
+    result = parse("text[[1, 2, 3, 4]]\n<p>Total</p> <b>due</b>")
+    assert result.regions[0].lines == ("Total due",)
